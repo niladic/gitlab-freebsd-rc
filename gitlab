@@ -1,0 +1,128 @@
+#!/bin/sh
+
+# PROVIDE: gitlab 
+# REQUIRE: redis
+# BEFORE:  nginx
+# KEYWORD: shutdown
+
+# Gitlab v5.3
+#
+# Add the following lines to /etc/rc.conf to enable gitlab:
+# gitlab_enable (bool):          Set to "NO" by default.
+#                                Set it to "YES" to enable gitlab
+
+. /etc/rc.subr
+
+name="gitlab"
+rcvar=gitlab_enable
+extra_commands="status"
+
+load_rc_config $name
+
+: ${gitlab_enable="NO"}
+
+
+app_root="/home/gitlab/gitlab"
+app_user="gitlab"
+daemon_opts="-C ${app_root}/config/puma.rb"
+pid_path="${app_root}/tmp/pids"
+socket_path="${app_root}/tmp/sockets"
+gitlab_socket="gitlab.socket"
+web_server_pid="${pid_path}/puma.pid"
+sidekiq_pid="${pid_path}/sidekiq.pid"
+stop_sidekiq="bundle exec rake sidekiq:stop"
+start_sidekiq="bundle exec rake sidekiq:start"
+
+
+gitlab_check_pid() {
+  if [ -f "${web_server_pid}" ]; then
+    pid=`cat "${web_server_pid}"`
+    if [ -f "${sidekiq_pid}" ]; then
+      spid=`cat "${sidekiq_pid}"`
+    else
+      spid=0
+    fi
+    status=`ps aux | grep "${pid}" | grep -v grep | wc -l`
+  else
+    status=0
+    pid=0
+  fi
+}
+
+gitlab_start() {
+  gitlab_check_pid
+  if [ "${pid}" -ne 0 -a "${status}" -ne 0 ]; then
+    # Program is running, exit with error code 1.
+    echo "Error! ${name} is currently running!"
+    return 1
+  else
+    su ${app_user} -c "rm -f ${socket_path}/${gitlab_socket} ${pid_path}/*"
+    su ${app_user} -c 'RAILS_ENV=production '"bundle exec puma ${daemon_opts}"
+    gitlab_start_sidekiq
+    echo "${name} started"
+  fi
+}
+
+gitlab_stop() {
+  gitlab_check_pid
+  if [ "${pid}" -ne 0 -a "${status}" -ne 0 ]; then
+    ## Program is running, stop it.
+    kill -QUIT `cat ${web_server_pid}`
+    gitlab_stop_sidekiq
+    rm -f "${web_server_pid}"
+    echo "${name} stopped"
+  else
+    ## Program is not running, exit with error.
+    echo "Error! ${name} not started!"
+    return 1
+  fi
+}
+
+gitlab_restart() {
+  gitlab_check_pid
+  if [ "${pid}" -ne 0 -a "${status}" -ne 0 ]; then
+    echo "Restarting ${name}..."
+    kill -USR2 `cat ${web_server_pid}`
+    gitlab_stop_sidekiq
+    gitlab_start_sidekiq
+    echo "${name} restarted."
+  else
+    echo "Error, ${name} not running!"
+    return 1
+  fi
+}
+
+# Does't work, kills puma
+# gitlab_reload() {
+#   gitlab_check_pid
+#   echo "Reloading ${name} configuration:"
+#   kill -HUP ${pid}
+#   echo "done."
+# }
+
+gitlab_status() {
+  gitlab_check_pid
+  if [ "${pid}" -ne 0 -a "${status}" -ne 0 ]; then
+    echo "${name} / Puma with PID ${pid} is running."
+    echo "${name} / Sidekiq with PID ${spid} is running."
+  else
+    echo "${name} is not running."
+    return 1
+  fi
+}
+
+gitlab_start_sidekiq() {
+  su ${app_user} -c "mkdir -p ${pid_path} && cd ${app_root} && "'RAILS_ENV=production '"${start_sidekiq}"
+}
+
+gitlab_stop_sidekiq() {
+  su ${app_user} -c "mkdir -p ${pid_path} && cd ${app_root} && "'RAILS_ENV=production '"${stop_sidekiq}"
+}
+
+
+start_cmd="gitlab_start"
+stop_cmd="gitlab_stop"
+restart_cmd="gitlab_restart"
+status_cmd="gitlab_status"
+
+run_rc_command "$1"
