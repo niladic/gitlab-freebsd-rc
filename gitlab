@@ -57,7 +57,7 @@ gitlab_start() {
     return 1
   else
     su ${app_user} -c "rm -f ${socket_path}/${gitlab_socket} ${pid_path}/*"
-    su ${app_user} -c 'RAILS_ENV=production '"bundle exec puma ${daemon_opts}"
+    su ${app_user} -c "cd ${app_root} && "'RAILS_ENV=production '"bundle exec puma ${daemon_opts}"
     gitlab_start_sidekiq
     echo "${name} started"
   fi
